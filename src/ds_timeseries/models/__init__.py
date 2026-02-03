@@ -8,12 +8,16 @@ from ds_timeseries.models.baselines import (
     WeightedMovingAverageForecaster,
 )
 from ds_timeseries.models.ensemble import (
+    DRFAMEnsemble,
     HierarchicalEnsemble,
+    M5WinnerEnsemble,
+    MultiLevelPoolingEnsemble,
     SimpleEnsemble,
     StackingEnsemble,
     WeightedEnsemble,
 )
 from ds_timeseries.models.ml import (
+    CatBoostForecaster,
     LightGBMForecaster,
     ProphetForecaster,
     ProphetXGBoostHybrid,
@@ -23,6 +27,12 @@ from ds_timeseries.models.statistical import (
     ETSForecaster,
     NaiveStatsForecast,
     SeasonalNaiveStatsForecast,
+    # Intermittent demand models
+    CrostonForecaster,
+    SBAForecaster,
+    TSBForecaster,
+    ADIDAForecaster,
+    IMAPAForecaster,
 )
 from ds_timeseries.models.tuning import (
     TuningResult,
@@ -31,6 +41,22 @@ from ds_timeseries.models.tuning import (
     tune_lightgbm,
     tune_xgboost,
 )
+
+# Neural models (require optional 'neural' dependencies)
+try:
+    from ds_timeseries.models.neural import (
+        AutoNeuralForecaster,
+        DeepARForecaster,
+        LSTMForecaster,
+        NBEATSForecaster,
+        NeuralConfig,
+        NeuralEnsembleForecaster,
+        NHITSForecaster,
+        TFTForecaster,
+    )
+    _NEURAL_AVAILABLE = True
+except ImportError:
+    _NEURAL_AVAILABLE = False
 
 __all__ = [
     "BaseForecaster",
@@ -43,9 +69,16 @@ __all__ = [
     "ETSForecaster",
     "NaiveStatsForecast",
     "SeasonalNaiveStatsForecast",
-    # ML
+    # Intermittent Demand (sparse/sporadic demand)
+    "CrostonForecaster",
+    "SBAForecaster",
+    "TSBForecaster",
+    "ADIDAForecaster",
+    "IMAPAForecaster",
+    # ML (Gradient Boosting)
     "LightGBMForecaster",
     "XGBoostForecaster",
+    "CatBoostForecaster",
     "ProphetForecaster",
     "ProphetXGBoostHybrid",
     # Ensembles
@@ -53,6 +86,9 @@ __all__ = [
     "WeightedEnsemble",
     "StackingEnsemble",
     "HierarchicalEnsemble",
+    "DRFAMEnsemble",
+    "MultiLevelPoolingEnsemble",
+    "M5WinnerEnsemble",
     # Tuning
     "TuningResult",
     "grid_search_cv",
@@ -60,3 +96,17 @@ __all__ = [
     "tune_lightgbm",
     "tune_xgboost",
 ]
+
+# Add neural models if available
+if _NEURAL_AVAILABLE:
+    __all__.extend([
+        # Neural Networks (require 'neural' extra)
+        "NeuralConfig",
+        "NBEATSForecaster",
+        "NHITSForecaster",
+        "DeepARForecaster",
+        "TFTForecaster",
+        "LSTMForecaster",
+        "AutoNeuralForecaster",
+        "NeuralEnsembleForecaster",
+    ])

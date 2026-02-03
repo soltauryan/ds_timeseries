@@ -127,6 +127,44 @@ config = FiscalCalendarConfig(fiscal_year_start_month=11, week_pattern="5-4-4")
 | LightGBM | 37.16% | |
 | Simple Ensemble | 37.17% | Average of 3 models |
 
+### Phase 4: Extended Models ✅ COMPLETE
+- [x] CatBoost forecaster (native categorical handling)
+- [x] Direct forecasting mode (separate model per horizon step)
+- [x] Neural network wrappers via NeuralForecast:
+  - N-BEATS (M4 winner, interpretable)
+  - NHITS (hierarchical interpolation)
+  - DeepAR (Amazon probabilistic)
+  - TFT (Temporal Fusion Transformer, Google SOTA)
+  - LSTM baseline
+  - NeuralEnsemble (combine multiple NN architectures)
+  - AutoNeuralForecaster (Optuna-based tuning)
+- [x] DRFAM Ensemble (M5 1st place: Direct + Recursive averaging)
+- [x] MultiLevelPoolingEnsemble
+- [x] M5WinnerEnsemble (full 220-model architecture)
+
+#### Available Model Classes
+| Category | Models |
+|----------|--------|
+| Baselines | NaiveForecaster, MovingAverageForecaster, SeasonalNaiveForecaster |
+| Statistical | ETSForecaster |
+| Gradient Boosting | LightGBMForecaster, XGBoostForecaster, CatBoostForecaster |
+| Prophet | ProphetForecaster, ProphetXGBoostHybrid |
+| Neural (optional) | NBEATSForecaster, NHITSForecaster, DeepARForecaster, TFTForecaster, LSTMForecaster |
+| Ensembles | SimpleEnsemble, WeightedEnsemble, StackingEnsemble, HierarchicalEnsemble, DRFAMEnsemble, M5WinnerEnsemble |
+
+#### Direct vs Recursive Forecasting
+```python
+# Recursive (default): predict step by step, use predictions as features
+model = LightGBMForecaster(strategy="recursive")
+
+# Direct: separate model for each horizon step (M5 winner approach)
+model = LightGBMForecaster(strategy="direct")
+model.fit(train, horizon=4)  # Must specify horizon
+
+# DRFAM: averages both strategies (M5 1st place)
+ensemble = DRFAMEnsemble(model_class=LightGBMForecaster, use_direct=True, use_recursive=True)
+```
+
 ## Recommended Libraries
 
 ### Core Dependencies
@@ -143,12 +181,14 @@ mlforecast             # ML models for time series (Nixtla)
 hierarchicalforecast   # Reconciliation methods (Nixtla)
 lightgbm               # Gradient boosting
 xgboost                # Gradient boosting
+catboost               # Gradient boosting with native categoricals
 ```
 
 ### Optional
 ```
 prophet                # Holiday/seasonality (slower, use sparingly)
-pytorch-forecasting    # Deep learning approaches (Phase 4+)
+neuralforecast         # Neural networks (N-BEATS, NHITS, TFT, DeepAR)
+pytorch-forecasting    # Deep learning approaches
 ```
 
 ## Folder Structure
@@ -176,7 +216,10 @@ ds_timeseries/
 │       │   ├── base.py         # Abstract base forecaster
 │       │   ├── baselines.py    # Naive, Moving Average, Seasonal Naive
 │       │   ├── statistical.py  # ETS, ARIMA
-│       │   └── ml.py           # LightGBM, XGBoost wrappers
+│       │   ├── ml.py           # LightGBM, XGBoost, CatBoost, Prophet
+│       │   ├── neural.py       # N-BEATS, NHITS, TFT, DeepAR (optional)
+│       │   ├── ensemble.py     # Simple, Weighted, Stacking, DRFAM, M5Winner
+│       │   └── tuning.py       # Hyperparameter tuning
 │       ├── evaluation/
 │       │   ├── __init__.py
 │       │   ├── metrics.py      # WAPE, MAE, etc.
@@ -279,6 +322,118 @@ uv add pandas numpy  # runtime deps
 uv add --dev pytest  # dev deps
 ```
 
+## Presenting to Leadership (Non-Technical Stakeholders)
+
+Leadership wants to see **impact**, not technical details. Focus on business value and intuitive visuals.
+
+### Recommended Visualizations
+
+#### 1. Before/After Forecast Accuracy Chart
+Show forecast vs actuals for a few key products. Use simple line charts.
+```python
+from ds_timeseries.evaluation import plot_forecast
+
+# Pick a high-volume product leadership knows
+fig = plot_forecast(actuals, forecasts, series_id="TOP_PRODUCT_001", n_history=26)
+fig.suptitle("Forecast vs Actual - Top Product (Last 6 Months)", fontsize=14)
+```
+**Key message**: "Our new model follows the actual pattern much more closely"
+
+#### 2. Accuracy Improvement Summary (One Number)
+```python
+# WAPE is intuitive: "On average, our forecast is X% off from actual"
+old_wape = 0.45  # Previous model or naive baseline
+new_wape = 0.37  # Your new model
+
+improvement = (old_wape - new_wape) / old_wape * 100
+print(f"Forecast accuracy improved by {improvement:.0f}%")
+# "Forecast accuracy improved by 18%"
+```
+
+#### 3. Dollar Impact Visualization
+Convert forecast error to dollars. Leadership cares about money.
+```python
+avg_order_value = 500  # dollars
+annual_units = 100000
+error_reduction = old_wape - new_wape  # e.g., 0.08
+
+annual_savings = avg_order_value * annual_units * error_reduction
+print(f"Estimated annual savings: ${annual_savings:,.0f}")
+```
+
+#### 4. Inventory Impact Chart
+Show projected inventory reductions or stockout improvements.
+```
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Stockouts/month | 45 | 32 | -29% |
+| Excess inventory | $2.1M | $1.7M | -19% |
+| Forecast WAPE | 45% | 37% | +18% accuracy |
+```
+
+#### 5. Simple Model Comparison Bar Chart
+```python
+import matplotlib.pyplot as plt
+
+models = ["Current System", "Moving Average", "New ML Model"]
+accuracy = [55, 63, 73]  # % accuracy (100 - WAPE*100)
+
+plt.figure(figsize=(8, 5))
+bars = plt.bar(models, accuracy, color=["gray", "lightblue", "green"])
+plt.ylabel("Forecast Accuracy (%)", fontsize=12)
+plt.title("Forecast Accuracy Comparison", fontsize=14)
+plt.ylim(0, 100)
+
+# Add value labels
+for bar, val in zip(bars, accuracy):
+    plt.text(bar.get_x() + bar.get_width()/2, val + 2, f"{val}%", ha="center")
+
+plt.tight_layout()
+plt.savefig("model_comparison_leadership.png", dpi=150)
+```
+
+### Key Talking Points for Leadership
+
+1. **"We reduced forecast error by X%"** - Single headline metric
+2. **"This translates to $Y in potential savings"** - Business impact
+3. **"The model automatically detects seasonal patterns"** - Intelligence
+4. **"We can forecast 4 weeks ahead with Z% accuracy"** - Actionable timeline
+5. **"Here's how it predicted [recent event] correctly"** - Concrete example
+
+### What NOT to Show Leadership
+- WAPE/MASE/RMSE formulas
+- Model architecture diagrams
+- Code snippets
+- Training/validation curves
+- Feature importance lists (unless they ask)
+
+### Dashboard Recommendations
+
+For ongoing monitoring, create a simple dashboard with:
+
+1. **Traffic Light Summary**
+   - 🟢 Green: WAPE < 35% (good)
+   - 🟡 Yellow: WAPE 35-50% (acceptable)
+   - 🔴 Red: WAPE > 50% (needs attention)
+
+2. **Week-over-Week Trend**
+   - Simple line chart of accuracy over time
+   - Shows the model is stable/improving
+
+3. **Top 10 Products Table**
+   - Product name, Last week's forecast, Actual, Difference
+   - Familiar format leadership can scan quickly
+
+4. **Exception Report**
+   - Products where forecast was way off
+   - Actionable for operations team
+
+### Tools for Leadership Dashboards
+- **Streamlit**: Quick Python dashboards
+- **Power BI/Tableau**: If company already uses these
+- **Google Sheets**: Simple, shareable, no IT involvement
+- **Matplotlib exports to PPT**: For monthly reviews
+
 ## Key Decisions Log
 
 | Date | Decision | Rationale |
@@ -291,6 +446,14 @@ uv add --dev pytest  # dev deps
 | 2026-02-02 | XGBoost best overall (36.78% WAPE) | 7% improvement over ETS baseline |
 | 2026-02-02 | LightGBM with Tweedie objective | Handles intermittent demand (zeros) well |
 | 2026-02-02 | Prophet underperforms on granular data | Better for aggregate-level forecasting |
+| 2026-02-03 | Add CatBoost alongside LightGBM/XGBoost | Native categorical handling, robust to overfitting |
+| 2026-02-03 | Implement direct + recursive forecasting | M5 1st place averaged both strategies (DRFAM) |
+| 2026-02-03 | Add NeuralForecast models as optional | N-BEATS, NHITS, TFT for users who need neural networks |
+| 2026-02-03 | M5WinnerEnsemble implements 220-model arch | Full reproduction of M5 1st place approach |
+| 2026-02-03 | Add intermittent demand models (Croston, SBA, TSB) | Critical for spare parts/retail with >50% zeros |
+| 2026-02-03 | Add demand classification (Syntetos-Boylan scheme) | Automatically recommend models based on data characteristics |
+| 2026-02-03 | Add additional metrics (RMSSE, sMAPE, Winkler) | Complete M5 metric suite, interval evaluation |
+| 2026-02-03 | Add data validation and leakage detection | Prevent common mistakes in production |
 
 ## References
 

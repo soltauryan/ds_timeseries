@@ -32,6 +32,7 @@ dependencies = [
     "datasetsforecast>=1.0",
     "lightgbm>=4.0",
     "xgboost>=2.0",
+    "catboost>=1.2",
     "pyarrow>=14.0",
 ]
 
@@ -51,9 +52,15 @@ prophet = [
     "prophet>=1.1",
 ]
 
+neural = [
+    "neuralforecast>=1.6",
+    "torch>=2.0",
+]
+
 deep = [
     "pytorch-forecasting>=1.0",
     "torch>=2.0",
+    "neuralforecast>=1.6",
 ]
 
 [tool.hatch.build.targets.wheel]

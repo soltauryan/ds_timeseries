@@ -6,7 +6,22 @@ from ds_timeseries.evaluation.cross_validation import (
     cv_score,
     time_series_cv,
 )
-from ds_timeseries.evaluation.metrics import mae, wape
+from ds_timeseries.evaluation.metrics import (
+    bias,
+    coverage,
+    evaluate_forecast,
+    evaluate_intervals,
+    interval_width,
+    mae,
+    mape,
+    mase,
+    rmse,
+    rmsse,
+    scaled_pinball_loss,
+    smape,
+    wape,
+    winkler_score,
+)
 from ds_timeseries.evaluation.plots import (
     plot_feature_importance,
     plot_forecast,
@@ -17,9 +32,24 @@ from ds_timeseries.evaluation.plots import (
 )
 
 __all__ = [
-    # Metrics
+    # Primary Metrics (recommended)
     "wape",
     "mae",
+    "rmse",
+    "mase",
+    "rmsse",
+    "bias",
+    # Secondary Metrics (use with caution)
+    "mape",
+    "smape",
+    # Interval Metrics
+    "coverage",
+    "interval_width",
+    "winkler_score",
+    "scaled_pinball_loss",
+    # Evaluation Helpers
+    "evaluate_forecast",
+    "evaluate_intervals",
     # Cross-validation
     "time_series_cv",
     "cross_validate",

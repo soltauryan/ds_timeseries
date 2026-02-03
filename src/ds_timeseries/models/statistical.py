@@ -2,6 +2,13 @@
 
 Wraps statsforecast models to provide consistent API with our BaseForecaster.
 Uses the Nixtla statsforecast library for fast, optimized implementations.
+
+Includes specialized models for intermittent demand:
+- Croston: Classic method for sporadic demand
+- SBA: Syntetos-Boylan Approximation (bias-corrected Croston)
+- TSB: Teunter-Syntetos-Babai (handles obsolescence)
+- ADIDA: Aggregate-Disaggregate Intermittent Demand Approach
+- IMAPA: Intermittent Multiple Aggregation Prediction Algorithm
 """
 
 from __future__ import annotations
@@ -14,6 +21,12 @@ from statsforecast.models import (
     AutoETS,
     SeasonalNaive as SFSeasonalNaive,
     Naive as SFNaive,
+    CrostonClassic,
+    CrostonOptimized,
+    CrostonSBA,
+    TSB,
+    ADIDA,
+    IMAPA,
 )
 
 from ds_timeseries.models.base import BaseForecaster
@@ -143,3 +156,177 @@ class SeasonalNaiveStatsForecast(StatsForecastWrapper):
     def __init__(self, season_length: int = 52, **kwargs: Any) -> None:
         sf_model = SFSeasonalNaive(season_length=season_length)
         super().__init__(sf_model, season_length=season_length, **kwargs)
+
+
+# =============================================================================
+# Intermittent Demand Models
+# =============================================================================
+
+
+class CrostonForecaster(StatsForecastWrapper):
+    """Croston's method for intermittent demand forecasting.
+
+    Designed for time series with many zeros (sporadic/intermittent demand).
+    Separates the forecasting into:
+    1. Non-zero demand size (exponential smoothing)
+    2. Inter-demand interval (exponential smoothing)
+
+    Best for: Spare parts, slow-moving items, products with >80% zero values.
+
+    Parameters
+    ----------
+    optimized : bool
+        If True, use optimized version that selects best alpha.
+        If False, use classic version with fixed alpha.
+
+    Examples
+    --------
+    >>> model = CrostonForecaster()
+    >>> model.fit(train_df)
+    >>> forecasts = model.predict(horizon=4)
+
+    Notes
+    -----
+    Known limitation: Croston's method is biased (tends to over-forecast).
+    Consider using SBA (Syntetos-Boylan Approximation) for bias correction.
+
+    References
+    ----------
+    - Croston, J. D. (1972). "Forecasting and Stock Control for
+      Intermittent Demands"
+    """
+
+    def __init__(self, optimized: bool = True, **kwargs: Any) -> None:
+        if optimized:
+            sf_model = CrostonOptimized()
+        else:
+            sf_model = CrostonClassic()
+        super().__init__(sf_model, optimized=optimized, **kwargs)
+
+
+class SBAForecaster(StatsForecastWrapper):
+    """Syntetos-Boylan Approximation (SBA) for intermittent demand.
+
+    Bias-corrected version of Croston's method. Applies a deflating factor
+    to reduce the systematic over-forecasting of Croston.
+
+    Recommended over Croston for most intermittent demand cases.
+
+    Parameters
+    ----------
+    None (uses default statsforecast parameters)
+
+    Examples
+    --------
+    >>> model = SBAForecaster()
+    >>> model.fit(train_df)
+    >>> forecasts = model.predict(horizon=4)
+
+    Notes
+    -----
+    SBA has been shown in multiple empirical studies to outperform
+    Croston's method in terms of both forecasting and inventory performance.
+
+    References
+    ----------
+    - Syntetos, A. A., & Boylan, J. E. (2005). "The accuracy of intermittent
+      demand estimates"
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        sf_model = CrostonSBA()
+        super().__init__(sf_model, **kwargs)
+
+
+class TSBForecaster(StatsForecastWrapper):
+    """Teunter-Syntetos-Babai (TSB) method for intermittent demand.
+
+    Improves on Croston and SBA by updating the demand probability
+    (rather than interval) in every period, including zero-demand periods.
+
+    Key advantage: Handles obsolescence (when an item stops selling).
+    TSB will decrease forecasts during extended periods of zero demand.
+
+    Parameters
+    ----------
+    alpha_d : float
+        Smoothing parameter for demand size (0 < alpha < 1).
+    alpha_p : float
+        Smoothing parameter for demand probability (0 < alpha < 1).
+
+    Examples
+    --------
+    >>> model = TSBForecaster(alpha_d=0.1, alpha_p=0.1)
+    >>> model.fit(train_df)
+    >>> forecasts = model.predict(horizon=4)
+
+    When to use:
+    - Products with risk of obsolescence
+    - Items that may be discontinued
+    - Slow-moving inventory with declining demand
+
+    References
+    ----------
+    - Teunter, R., Syntetos, A., & Babai, M. Z. (2011). "Intermittent demand:
+      Linking forecasting to inventory obsolescence"
+    """
+
+    def __init__(self, alpha_d: float = 0.1, alpha_p: float = 0.1, **kwargs: Any) -> None:
+        sf_model = TSB(alpha_d=alpha_d, alpha_p=alpha_p)
+        super().__init__(sf_model, alpha_d=alpha_d, alpha_p=alpha_p, **kwargs)
+
+
+class ADIDAForecaster(StatsForecastWrapper):
+    """Aggregate-Disaggregate Intermittent Demand Approach (ADIDA).
+
+    Temporal aggregation approach for intermittent demand:
+    1. Aggregates data to reduce intermittence
+    2. Forecasts at aggregated level
+    3. Disaggregates back to original frequency
+
+    Parameters
+    ----------
+    aggregation_level : int
+        Number of periods to aggregate. Higher = more smoothing.
+
+    Examples
+    --------
+    >>> model = ADIDAForecaster(aggregation_level=4)
+    >>> model.fit(train_df)
+    >>> forecasts = model.predict(horizon=4)
+
+    References
+    ----------
+    - Nikolopoulos, K., et al. (2011). "An aggregate-disaggregate
+      intermittent demand approach (ADIDA) to forecasting"
+    """
+
+    def __init__(self, aggregation_level: int = 2, **kwargs: Any) -> None:
+        sf_model = ADIDA(aggregation_level=aggregation_level)
+        super().__init__(sf_model, aggregation_level=aggregation_level, **kwargs)
+
+
+class IMAPAForecaster(StatsForecastWrapper):
+    """Intermittent Multiple Aggregation Prediction Algorithm (IMAPA).
+
+    Extension of ADIDA that uses multiple aggregation levels and
+    combines forecasts from each level.
+
+    More robust than ADIDA as it doesn't require choosing a single
+    aggregation level.
+
+    Examples
+    --------
+    >>> model = IMAPAForecaster()
+    >>> model.fit(train_df)
+    >>> forecasts = model.predict(horizon=4)
+
+    References
+    ----------
+    - Petropoulos, F., & Kourentzes, N. (2015). "Forecast combinations
+      for intermittent demand"
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        sf_model = IMAPA()
+        super().__init__(sf_model, **kwargs)
