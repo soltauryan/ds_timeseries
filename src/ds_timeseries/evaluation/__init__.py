@@ -23,6 +23,7 @@ from ds_timeseries.evaluation.metrics import (
     winkler_score,
 )
 from ds_timeseries.evaluation.plots import (
+    plot_cv_performance,
     plot_feature_importance,
     plot_forecast,
     plot_forecast_grid,
@@ -62,4 +63,5 @@ __all__ = [
     "plot_metrics_comparison",
     "plot_residuals",
     "plot_feature_importance",
+    "plot_cv_performance",
 ]

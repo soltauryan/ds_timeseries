@@ -11,6 +11,8 @@ from typing import Literal
 
 import pandas as pd
 
+from ds_timeseries.utils.config import DEFAULT_FREQ
+
 # Default data directory
 DATA_DIR = Path(__file__).parent.parent.parent.parent.parent / "data" / "raw"
 
@@ -196,18 +198,18 @@ def _standardize_format(df: pd.DataFrame, name: str, config: dict) -> pd.DataFra
     return result
 
 
-def _aggregate_to_weekly(df: pd.DataFrame) -> pd.DataFrame:
+def _aggregate_to_weekly(df: pd.DataFrame, freq: str = DEFAULT_FREQ) -> pd.DataFrame:
     """Aggregate daily data to weekly frequency.
 
-    Uses week starting Monday (ISO week).
+    Uses week ending on day specified by freq (e.g., W-SAT = Saturday).
     """
     df = df.copy()
 
     # Get non-time columns for grouping (hierarchy columns)
     id_cols = [c for c in df.columns if c not in ["ds", "y"]]
 
-    # Aggregate to weekly
-    df["ds"] = df["ds"].dt.to_period("W-SUN").dt.start_time
+    # Aggregate to weekly using the specified frequency
+    df["ds"] = df["ds"].dt.to_period(freq).dt.start_time
 
     agg_dict = {"y": "sum"}
     for col in id_cols:
@@ -265,9 +267,9 @@ def create_synthetic_customer_material(
     combos = list(set(zip(customers, materials)))
     n_combos = len(combos)
 
-    # Generate date range
-    start_date = pd.Timestamp("2023-01-02")  # Monday
-    dates = pd.date_range(start=start_date, periods=n_weeks, freq="W-MON")
+    # Generate date range (aligned to Saturday for W-SAT)
+    start_date = pd.Timestamp("2023-01-07")  # Saturday
+    dates = pd.date_range(start=start_date, periods=n_weeks, freq=DEFAULT_FREQ)
 
     records = []
 

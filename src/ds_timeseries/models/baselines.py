@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from ds_timeseries.models.base import BaseForecaster
+from ds_timeseries.utils.config import DEFAULT_FREQ
 
 
 class NaiveForecaster(BaseForecaster):
@@ -39,7 +40,7 @@ class NaiveForecaster(BaseForecaster):
         self._is_fitted = True
         return self
 
-    def predict(self, horizon: int, freq: str = "W-MON", **kwargs: Any) -> pd.DataFrame:
+    def predict(self, horizon: int, freq: str = DEFAULT_FREQ, **kwargs: Any) -> pd.DataFrame:
         """Predict last value for all future periods."""
         if not self._is_fitted:
             raise RuntimeError("Model must be fitted before prediction")
@@ -99,7 +100,7 @@ class SeasonalNaiveForecaster(BaseForecaster):
         self._is_fitted = True
         return self
 
-    def predict(self, horizon: int, freq: str = "W-MON", **kwargs: Any) -> pd.DataFrame:
+    def predict(self, horizon: int, freq: str = DEFAULT_FREQ, **kwargs: Any) -> pd.DataFrame:
         """Predict using values from same period last season."""
         if not self._is_fitted:
             raise RuntimeError("Model must be fitted before prediction")
@@ -169,7 +170,7 @@ class MovingAverageForecaster(BaseForecaster):
         self._is_fitted = True
         return self
 
-    def predict(self, horizon: int, freq: str = "W-MON", **kwargs: Any) -> pd.DataFrame:
+    def predict(self, horizon: int, freq: str = DEFAULT_FREQ, **kwargs: Any) -> pd.DataFrame:
         """Predict moving average for all future periods."""
         if not self._is_fitted:
             raise RuntimeError("Model must be fitted before prediction")
@@ -255,7 +256,7 @@ class WeightedMovingAverageForecaster(BaseForecaster):
         self._is_fitted = True
         return self
 
-    def predict(self, horizon: int, freq: str = "W-MON", **kwargs: Any) -> pd.DataFrame:
+    def predict(self, horizon: int, freq: str = DEFAULT_FREQ, **kwargs: Any) -> pd.DataFrame:
         """Predict weighted moving average for all future periods."""
         if not self._is_fitted:
             raise RuntimeError("Model must be fitted before prediction")

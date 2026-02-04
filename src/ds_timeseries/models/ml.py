@@ -20,6 +20,7 @@ from sklearn.preprocessing import LabelEncoder
 
 from ds_timeseries.features.engineering import FeatureConfig, engineer_features
 from ds_timeseries.models.base import BaseForecaster
+from ds_timeseries.utils.config import DEFAULT_FREQ
 
 # Type for forecasting strategy
 ForecastStrategy = Literal["recursive", "direct"]
@@ -885,7 +886,7 @@ class ProphetForecaster(BaseForecaster):
             future_dates = pd.date_range(
                 start=last_date + pd.Timedelta(weeks=1),
                 periods=horizon,
-                freq="W-MON",
+                freq=DEFAULT_FREQ,
             )
 
             future_df = pd.DataFrame({"ds": future_dates})

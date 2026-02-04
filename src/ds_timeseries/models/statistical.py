@@ -30,6 +30,7 @@ from statsforecast.models import (
 )
 
 from ds_timeseries.models.base import BaseForecaster
+from ds_timeseries.utils.config import DEFAULT_FREQ
 
 
 class StatsForecastWrapper(BaseForecaster):
@@ -39,7 +40,7 @@ class StatsForecastWrapper(BaseForecaster):
     optimized implementations.
     """
 
-    def __init__(self, sf_model: Any, season_length: int = 52, **kwargs: Any) -> None:
+    def __init__(self, sf_model: Any, season_length: int = 52, freq: str = DEFAULT_FREQ, **kwargs: Any) -> None:
         """Initialize with a statsforecast model instance.
 
         Parameters
@@ -52,6 +53,7 @@ class StatsForecastWrapper(BaseForecaster):
         super().__init__(season_length=season_length, **kwargs)
         self.sf_model = sf_model
         self.season_length = season_length
+        self.freq = freq
         self._sf: StatsForecast | None = None
 
     def fit(self, df: pd.DataFrame) -> "StatsForecastWrapper":
@@ -60,7 +62,7 @@ class StatsForecastWrapper(BaseForecaster):
 
         self._sf = StatsForecast(
             models=[self.sf_model],
-            freq="W-MON",  # Weekly frequency, Monday start
+            freq=self.freq,
             n_jobs=1,
         )
         self._sf.fit(df[["unique_id", "ds", "y"]])

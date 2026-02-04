@@ -14,6 +14,8 @@ from typing import Literal
 import pandas as pd
 import numpy as np
 
+from ds_timeseries.utils.config import DEFAULT_FREQ
+
 
 WeekPattern = Literal["4-4-5", "4-5-4", "5-4-4"]
 
@@ -50,6 +52,7 @@ def generate_fiscal_calendar(
     start_date: str | pd.Timestamp,
     end_date: str | pd.Timestamp,
     config: FiscalCalendarConfig | None = None,
+    freq: str = DEFAULT_FREQ,
 ) -> pd.DataFrame:
     """Generate a fiscal calendar DataFrame.
 
@@ -90,10 +93,15 @@ def generate_fiscal_calendar(
     start = pd.Timestamp(start_date)
     end = pd.Timestamp(end_date)
 
-    # Generate weekly dates (Monday start)
-    # Align to Monday
-    start_monday = start - pd.Timedelta(days=start.weekday())
-    weeks = pd.date_range(start=start_monday, end=end, freq="W-MON")
+    # Generate weekly dates aligned to frequency
+    # Extract day from freq (e.g., "W-SAT" -> Saturday = 5)
+    freq_day_map = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6}
+    freq_day = freq_day_map.get(freq.split("-")[-1], 5)  # Default to Saturday
+
+    # Align start date to the frequency day
+    days_to_freq_day = (freq_day - start.weekday()) % 7
+    start_aligned = start + pd.Timedelta(days=days_to_freq_day)
+    weeks = pd.date_range(start=start_aligned, end=end, freq=freq)
 
     records = []
     weeks_per_month = config.weeks_per_month  # e.g., [5, 4, 4]
@@ -105,7 +113,7 @@ def generate_fiscal_calendar(
         fiscal_year = _get_fiscal_year(week_date, config.fiscal_year_start_month)
 
         # Get fiscal year start date
-        fy_start = _get_fiscal_year_start(fiscal_year, config.fiscal_year_start_month)
+        fy_start = _get_fiscal_year_start(fiscal_year, config.fiscal_year_start_month, freq)
 
         # Calculate week number within fiscal year (1-based)
         days_since_fy_start = (week_date - fy_start).days
@@ -158,23 +166,23 @@ def _get_fiscal_year(date: pd.Timestamp, fy_start_month: int) -> int:
     return date.year
 
 
-def _get_fiscal_year_start(fiscal_year: int, fy_start_month: int) -> pd.Timestamp:
+def _get_fiscal_year_start(
+    fiscal_year: int, fy_start_month: int, freq: str = DEFAULT_FREQ
+) -> pd.Timestamp:
     """Get the start date of a fiscal year.
 
-    Returns the first Monday on or after the fiscal year start.
+    Returns the first week-end date on or after the fiscal year start.
     """
     # FY2024 with Nov start means it starts Nov 2023
     calendar_year = fiscal_year - 1 if fy_start_month > 6 else fiscal_year
     fy_start = pd.Timestamp(year=calendar_year, month=fy_start_month, day=1)
 
-    # Align to Monday (fiscal weeks start on Monday)
-    days_to_monday = (7 - fy_start.weekday()) % 7
-    if days_to_monday == 0 and fy_start.weekday() != 0:
-        days_to_monday = 7
-    if fy_start.weekday() == 0:
-        days_to_monday = 0
+    # Align to frequency day (e.g., Saturday for W-SAT)
+    freq_day_map = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6}
+    target_day = freq_day_map.get(freq.split("-")[-1], 5)  # Default to Saturday
 
-    return fy_start + pd.Timedelta(days=days_to_monday)
+    days_to_target = (target_day - fy_start.weekday()) % 7
+    return fy_start + pd.Timedelta(days=days_to_target)
 
 
 def _week_to_fiscal_periods(
@@ -229,6 +237,7 @@ def create_mock_fiscal_calendar(
     start_year: int = 2011,
     end_year: int = 2026,
     config: FiscalCalendarConfig | None = None,
+    freq: str = DEFAULT_FREQ,
 ) -> pd.DataFrame:
     """Create a mock fiscal calendar for testing.
 
@@ -243,6 +252,8 @@ def create_mock_fiscal_calendar(
         Calendar year to end at.
     config : FiscalCalendarConfig | None
         Fiscal calendar config. Defaults to Nov start, 5-4-4.
+    freq : str
+        Week frequency (e.g., "W-SAT", "W-MON").
 
     Returns
     -------
@@ -261,13 +272,14 @@ def create_mock_fiscal_calendar(
     start_date = f"{start_year}-01-01"
     end_date = f"{end_year}-12-31"
 
-    return generate_fiscal_calendar(start_date, end_date, config)
+    return generate_fiscal_calendar(start_date, end_date, config, freq)
 
 
 def add_fiscal_features(
     df: pd.DataFrame,
     fiscal_calendar: pd.DataFrame | None = None,
     config: FiscalCalendarConfig | None = None,
+    freq: str = DEFAULT_FREQ,
 ) -> pd.DataFrame:
     """Add fiscal calendar features to a time series DataFrame.
 
@@ -279,6 +291,8 @@ def add_fiscal_features(
         Pre-generated fiscal calendar. If None, generates one.
     config : FiscalCalendarConfig | None
         Config for generating calendar if not provided.
+    freq : str
+        Week frequency (e.g., "W-SAT", "W-MON").
 
     Returns
     -------
@@ -297,6 +311,7 @@ def add_fiscal_features(
             df["ds"].min() - pd.Timedelta(days=7),
             df["ds"].max() + pd.Timedelta(days=7),
             config,
+            freq,
         )
 
     # Merge on ds

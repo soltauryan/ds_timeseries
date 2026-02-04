@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from ds_timeseries.models.base import BaseForecaster
+from ds_timeseries.utils.config import DEFAULT_FREQ
 
 
 @dataclass
@@ -143,7 +144,7 @@ class NBEATSForecaster(BaseForecaster):
 
         self._nf = NeuralForecast(
             models=[model],
-            freq="W-MON",
+            freq=DEFAULT_FREQ,
         )
 
         self._nf.fit(df_nf)
@@ -241,7 +242,7 @@ class NHITSForecaster(BaseForecaster):
 
         self._nf = NeuralForecast(
             models=[model],
-            freq="W-MON",
+            freq=DEFAULT_FREQ,
         )
 
         self._nf.fit(df_nf)
@@ -339,7 +340,7 @@ class DeepARForecaster(BaseForecaster):
 
         self._nf = NeuralForecast(
             models=[model],
-            freq="W-MON",
+            freq=DEFAULT_FREQ,
         )
 
         self._nf.fit(df_nf)
@@ -444,7 +445,7 @@ class TFTForecaster(BaseForecaster):
 
         self._nf = NeuralForecast(
             models=[model],
-            freq="W-MON",
+            freq=DEFAULT_FREQ,
         )
 
         self._nf.fit(df_nf)
@@ -536,7 +537,7 @@ class LSTMForecaster(BaseForecaster):
 
         self._nf = NeuralForecast(
             models=[model],
-            freq="W-MON",
+            freq=DEFAULT_FREQ,
         )
 
         self._nf.fit(df_nf)
@@ -633,7 +634,7 @@ class AutoNeuralForecaster(BaseForecaster):
 
         self._nf = NeuralForecast(
             models=[model],
-            freq="W-MON",
+            freq=DEFAULT_FREQ,
         )
 
         self._nf.fit(df_nf)
@@ -768,7 +769,7 @@ class NeuralEnsembleForecaster(BaseForecaster):
 
         self._nf = NeuralForecast(
             models=model_instances,
-            freq="W-MON",
+            freq=DEFAULT_FREQ,
         )
 
         self._nf.fit(df_nf)
