@@ -387,6 +387,97 @@ feature_config = FeatureConfig(
 # - is_fiscal_quarter_end, is_fiscal_year_end
 ```
 
+### Bringing Your Own Fiscal Calendar
+
+If your company already has a fiscal calendar (from Finance, SAP, etc.), you can pass it directly instead of having the library generate one. Your calendar needs **one row per week** with `ds` dates matching your data's weekly frequency.
+
+#### Required Schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ds` | datetime | **Week-end date**, must match your data's frequency (e.g., Saturdays for W-SAT). This is the join key. |
+| `fiscal_year` | int | Fiscal year identifier (e.g., 2024). |
+| `fiscal_month` | int | Fiscal month 1-12 within the fiscal year. |
+
+#### Optional Columns (used by feature engineering)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `fiscal_quarter` | int | Quarter 1-4. If missing, rollup still works but output won't include it. |
+| `fiscal_week` | int | Week number 1-52 within the fiscal year. |
+| `fiscal_week_in_month` | int | Week position within the month (1-5). |
+| `fiscal_week_in_quarter` | int | Week position within the quarter (1-13). |
+| `is_fiscal_month_end` | bool | `True` for the last week of each fiscal month. **Critical** for hockey stick modeling. |
+| `is_fiscal_quarter_end` | bool | `True` for the last week of each fiscal quarter. |
+| `is_fiscal_year_end` | bool | `True` for the last week of the fiscal year. |
+
+The more columns you provide, the more features the ML models can use. At minimum you need `ds`, `fiscal_year`, and `fiscal_month`. For hockey stick detection, also include `is_fiscal_month_end`.
+
+#### Example: Loading Your Calendar
+
+```python
+import pandas as pd
+from ds_timeseries.features import (
+    engineer_features,
+    rollup_to_fiscal_month,
+    add_fiscal_features,
+    FeatureConfig,
+)
+
+# Load your company's fiscal calendar
+my_cal = pd.read_csv("our_fiscal_calendar.csv", parse_dates=["ds"])
+
+# Verify: one row per week, dates match your data
+assert my_cal["ds"].diff().dropna().eq(pd.Timedelta(days=7)).all()
+print(my_cal.head())
+#          ds  fiscal_year  fiscal_quarter  fiscal_month  is_fiscal_month_end
+# 2023-11-04         2024               1             1                False
+# 2023-11-11         2024               1             1                False
+# ...
+
+# Use with feature engineering (adds fiscal columns to your data)
+df_features = engineer_features(df, fiscal_calendar=my_cal)
+
+# Use with monthly rollup (derives weeks_expected from your calendar)
+monthly_fcst = rollup_to_fiscal_month(forecasts, fiscal_calendar=my_cal)
+```
+
+#### Key Requirements
+
+1. **Date alignment**: Your calendar's `ds` values must land on the same weekday as your data. If your data uses W-SAT (Saturday week-ends), your calendar must too. Rows that don't match will be silently unmatched.
+
+2. **Complete coverage**: The calendar should cover all dates in your data. Missing weeks will trigger a warning and those rows will be excluded from the rollup.
+
+3. **`weeks_expected` is automatic**: When you pass your own calendar, `rollup_to_fiscal_month` counts the weeks per fiscal month directly from the calendar — no need to declare a 5-4-4 or 4-4-5 pattern.
+
+### Rolling Up Weekly Forecasts to Fiscal Months
+
+Aggregate weekly predictions into fiscal monthly totals. Handles months with 4 or 5 weeks based on the pattern.
+
+```python
+from ds_timeseries.features import rollup_to_fiscal_month, FiscalCalendarConfig
+
+# Option A: Auto-generate calendar from config
+config = FiscalCalendarConfig(fiscal_year_start_month=11, week_pattern="5-4-4")
+monthly_fcst = rollup_to_fiscal_month(forecasts, config, value_cols="yhat")
+
+# Option B: Use your own fiscal calendar
+monthly_fcst = rollup_to_fiscal_month(forecasts, fiscal_calendar=my_cal)
+
+# Filter to only complete months (all expected weeks present)
+monthly_fcst = monthly_fcst[monthly_fcst["is_complete"]]
+
+# Monthly-level evaluation
+merged = actuals.merge(forecasts, on=["unique_id", "ds"])
+monthly = rollup_to_fiscal_month(merged, config, value_cols=["y", "yhat"])
+monthly = monthly[monthly["is_complete"]]
+
+from ds_timeseries.evaluation.metrics import wape
+print(f"Monthly WAPE: {wape(monthly['y'], monthly['yhat']):.2%}")
+```
+
+The output includes `weeks_expected`, `weeks_present`, and `is_complete` so you can decide how to handle partial months at the edges of your forecast horizon.
+
 ---
 
 ## Cross-Validation

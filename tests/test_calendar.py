@@ -323,3 +323,27 @@ class TestRollupToFiscalMonth:
         assert monthly.iloc[0]["weeks_expected"] == 4
         assert monthly.iloc[1]["weeks_expected"] == 4
         assert monthly.iloc[2]["weeks_expected"] == 5
+
+    def test_external_fiscal_calendar(self):
+        """Should accept a user-provided fiscal calendar instead of generating one."""
+        # Build a custom calendar (e.g., from a company's own fiscal system)
+        my_cal = pd.DataFrame({
+            "ds": pd.date_range("2024-01-06", periods=9, freq="W-SAT"),
+            "fiscal_year": [2024] * 9,
+            "fiscal_quarter": [1] * 9,
+            "fiscal_month": [1, 1, 1, 1, 1, 2, 2, 2, 2],  # 5-4 split
+        })
+
+        df = my_cal[["ds"]].copy()
+        df["unique_id"] = "X"
+        df["yhat"] = 5.0
+
+        monthly = rollup_to_fiscal_month(df, fiscal_calendar=my_cal)
+
+        assert len(monthly) == 2
+        # weeks_expected derived from the calendar: month 1 has 5 weeks, month 2 has 4
+        assert monthly.iloc[0]["weeks_expected"] == 5
+        assert monthly.iloc[0]["yhat"] == 25.0
+        assert monthly.iloc[1]["weeks_expected"] == 4
+        assert monthly.iloc[1]["yhat"] == 20.0
+        assert monthly["is_complete"].all()

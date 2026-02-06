@@ -325,6 +325,7 @@ def rollup_to_fiscal_month(
     fiscal_config: FiscalCalendarConfig | None = None,
     value_cols: str | list[str] = "yhat",
     freq: str = DEFAULT_FREQ,
+    fiscal_calendar: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Aggregate weekly data to fiscal monthly totals.
 
@@ -334,17 +335,29 @@ def rollup_to_fiscal_month(
 
     Works for both forecasts (value_col="yhat") and actuals (value_col="y").
 
+    You can either pass a ``fiscal_config`` to auto-generate the calendar, or
+    pass your own ``fiscal_calendar`` DataFrame. See the README section
+    "Bringing Your Own Fiscal Calendar" for the required schema.
+
     Parameters
     ----------
     df : pd.DataFrame
         Weekly data with columns: unique_id, ds, and one or more value columns.
     fiscal_config : FiscalCalendarConfig | None
         Fiscal calendar configuration. Defaults to 5-4-4, Nov start.
+        Ignored when ``fiscal_calendar`` is provided.
     value_cols : str | list[str]
         Column(s) to aggregate. Default "yhat" for forecasts; use "y" for
         actuals, or ["y", "yhat"] to roll up both together.
     freq : str
-        Week frequency (e.g., "W-SAT").
+        Week frequency (e.g., "W-SAT"). Only used when generating a calendar
+        (ignored when ``fiscal_calendar`` is provided).
+    fiscal_calendar : pd.DataFrame | None
+        Pre-built fiscal calendar with at least columns:
+        ``ds``, ``fiscal_year``, ``fiscal_quarter``, ``fiscal_month``.
+        If provided, ``weeks_expected`` is computed from the calendar itself
+        (count of rows per fiscal_year/fiscal_month) rather than from the
+        config pattern, so it works with any custom week counts.
 
     Returns
     -------
@@ -367,35 +380,44 @@ def rollup_to_fiscal_month(
     >>> monthly = rollup_to_fiscal_month(forecasts, value_cols="yhat")
     >>> monthly[monthly["is_complete"]]  # Only complete months
 
+    >>> # Roll up with your own fiscal calendar
+    >>> my_cal = pd.read_csv("our_fiscal_calendar.csv", parse_dates=["ds"])
+    >>> monthly = rollup_to_fiscal_month(forecasts, fiscal_calendar=my_cal)
+
     >>> # Roll up actuals and forecasts together for monthly evaluation
     >>> merged = actuals.merge(forecasts, on=["unique_id", "ds"])
     >>> monthly = rollup_to_fiscal_month(merged, value_cols=["y", "yhat"])
     >>> from ds_timeseries.evaluation.metrics import wape
     >>> wape(monthly["y"], monthly["yhat"])  # Monthly-level WAPE
     """
-    fiscal_config = fiscal_config or FiscalCalendarConfig()
-
     if isinstance(value_cols, str):
         value_cols = [value_cols]
 
-    # Generate fiscal calendar covering the data range
-    fiscal_cal = generate_fiscal_calendar(
-        df["ds"].min() - pd.Timedelta(days=7),
-        df["ds"].max() + pd.Timedelta(days=7),
-        fiscal_config,
-        freq,
-    )
+    # Use provided calendar or generate one
+    if fiscal_calendar is not None:
+        fiscal_cal = fiscal_calendar
+        use_external_calendar = True
+    else:
+        fiscal_config = fiscal_config or FiscalCalendarConfig()
+        fiscal_cal = generate_fiscal_calendar(
+            df["ds"].min() - pd.Timedelta(days=7),
+            df["ds"].max() + pd.Timedelta(days=7),
+            fiscal_config,
+            freq,
+        )
+        use_external_calendar = False
 
-    # Build lookup for expected weeks per fiscal month from the pattern
-    weeks_per_month_pattern = fiscal_config.weeks_per_month  # e.g. [5, 4, 4]
+    # Select merge columns — use what's available in the calendar
+    merge_cols = ["ds", "fiscal_year", "fiscal_quarter", "fiscal_month"]
+    available = [c for c in merge_cols if c in fiscal_cal.columns]
+    if not {"ds", "fiscal_year", "fiscal_month"}.issubset(fiscal_cal.columns):
+        raise ValueError(
+            "fiscal_calendar must have at least columns: ds, fiscal_year, "
+            "fiscal_month. See README 'Bringing Your Own Fiscal Calendar'."
+        )
 
     # Merge fiscal periods onto data
-    df_fiscal = df.merge(
-        fiscal_cal[["ds", "fiscal_year", "fiscal_quarter", "fiscal_month",
-                     "fiscal_week_in_month"]],
-        on="ds",
-        how="left",
-    )
+    df_fiscal = df.merge(fiscal_cal[available], on="ds", how="left")
 
     # Warn about unmatched weeks
     unmatched = df_fiscal["fiscal_month"].isna().sum()
@@ -403,12 +425,13 @@ def rollup_to_fiscal_month(
         import warnings
         warnings.warn(
             f"{unmatched} rows could not be mapped to a fiscal month. "
-            f"Check that 'ds' dates align to the {freq} frequency."
+            f"Check that 'ds' dates align to the weekly frequency."
         )
         df_fiscal = df_fiscal.dropna(subset=["fiscal_month"])
 
     # Aggregate to fiscal month
-    group_cols = ["unique_id", "fiscal_year", "fiscal_quarter", "fiscal_month"]
+    group_cols = [c for c in ["unique_id", "fiscal_year", "fiscal_quarter", "fiscal_month"]
+                  if c in df_fiscal.columns]
     agg_dict = {col: "sum" for col in value_cols}
     agg_dict["ds"] = ["min", "max", "count"]
 
@@ -428,21 +451,36 @@ def rollup_to_fiscal_month(
     for col in value_cols:
         monthly = monthly.rename(columns={f"{col}_sum": col})
 
-    # Add expected weeks per month from the pattern
-    def _expected_weeks(fiscal_month: int) -> int:
-        month_in_quarter = ((int(fiscal_month) - 1) % 3)
-        return weeks_per_month_pattern[month_in_quarter]
+    # Compute expected weeks per month
+    if use_external_calendar:
+        # Derive from the calendar itself: count weeks per fiscal year/month
+        expected = (
+            fiscal_cal.groupby(["fiscal_year", "fiscal_month"])["ds"]
+            .count()
+            .reset_index()
+            .rename(columns={"ds": "weeks_expected"})
+        )
+        monthly = monthly.merge(expected, on=["fiscal_year", "fiscal_month"], how="left")
+    else:
+        weeks_per_month_pattern = fiscal_config.weeks_per_month  # e.g. [5, 4, 4]
 
-    monthly["weeks_expected"] = monthly["fiscal_month"].apply(_expected_weeks)
+        def _expected_weeks(fiscal_month: int) -> int:
+            month_in_quarter = ((int(fiscal_month) - 1) % 3)
+            return weeks_per_month_pattern[month_in_quarter]
+
+        monthly["weeks_expected"] = monthly["fiscal_month"].apply(_expected_weeks)
+
     monthly["is_complete"] = monthly["weeks_present"] == monthly["weeks_expected"]
 
     # Cast fiscal period columns back to int (groupby preserves them but be safe)
     for col in ["fiscal_year", "fiscal_quarter", "fiscal_month"]:
-        monthly[col] = monthly[col].astype(int)
+        if col in monthly.columns:
+            monthly[col] = monthly[col].astype(int)
 
     # Order columns cleanly
     ordered = (
-        ["unique_id", "fiscal_year", "fiscal_quarter", "fiscal_month"]
+        [c for c in ["unique_id", "fiscal_year", "fiscal_quarter", "fiscal_month"]
+         if c in monthly.columns]
         + value_cols
         + ["weeks_expected", "weeks_present", "is_complete", "month_start", "month_end"]
     )
