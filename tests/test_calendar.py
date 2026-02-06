@@ -9,6 +9,7 @@ from ds_timeseries.features.calendar import (
     create_mock_fiscal_calendar,
     add_fiscal_features,
     get_fiscal_period_summary,
+    rollup_to_fiscal_month,
 )
 
 
@@ -212,3 +213,113 @@ class TestFiscalPeriodSummary:
         assert "fiscal_month" in summary.columns
         assert "weeks" in summary.columns
         assert "month_ends" in summary.columns
+
+
+class TestRollupToFiscalMonth:
+    """Tests for rollup_to_fiscal_month."""
+
+    @pytest.fixture
+    def config_544(self):
+        return FiscalCalendarConfig(fiscal_year_start_month=11, week_pattern="5-4-4")
+
+    @pytest.fixture
+    def weekly_data(self, config_544):
+        """Create 13 weeks of data (one full quarter) for two series."""
+        cal = generate_fiscal_calendar("2023-11-01", "2024-02-28", config_544, freq="W-SAT")
+        fy2024 = cal[cal["fiscal_year"] == 2024].head(13)  # Q1: 13 weeks
+
+        rows = []
+        for uid in ["A", "B"]:
+            for _, row in fy2024.iterrows():
+                rows.append({"unique_id": uid, "ds": row["ds"], "y": 10.0})
+        return pd.DataFrame(rows)
+
+    def test_basic_rollup(self, weekly_data, config_544):
+        """Should sum weekly values into fiscal months."""
+        monthly = rollup_to_fiscal_month(weekly_data, config_544, value_cols="y")
+
+        # 2 series * 3 months (5-4-4 quarter) = 6 rows
+        assert len(monthly) == 6
+
+        # 5-week month should sum to 50, 4-week months to 40
+        series_a = monthly[monthly["unique_id"] == "A"]
+        assert series_a.iloc[0]["y"] == 50.0   # 5 weeks * 10
+        assert series_a.iloc[1]["y"] == 40.0   # 4 weeks * 10
+        assert series_a.iloc[2]["y"] == 40.0   # 4 weeks * 10
+
+    def test_complete_flag(self, weekly_data, config_544):
+        """All months should be flagged as complete when data covers full month."""
+        monthly = rollup_to_fiscal_month(weekly_data, config_544, value_cols="y")
+        assert monthly["is_complete"].all()
+
+    def test_partial_month_detected(self, config_544):
+        """Should flag incomplete months when not all weeks are present."""
+        cal = generate_fiscal_calendar("2023-11-01", "2024-02-28", config_544, freq="W-SAT")
+        fy2024 = cal[cal["fiscal_year"] == 2024].head(13)
+
+        # Take only first 3 weeks of month 1 (which expects 5)
+        partial = fy2024.head(3)[["ds"]].copy()
+        partial["unique_id"] = "A"
+        partial["yhat"] = 10.0
+
+        monthly = rollup_to_fiscal_month(partial, config_544, value_cols="yhat")
+        row = monthly.iloc[0]
+        assert row["weeks_expected"] == 5
+        assert row["weeks_present"] == 3
+        assert not row["is_complete"]
+
+    def test_multiple_value_cols(self, config_544):
+        """Should aggregate multiple value columns."""
+        cal = generate_fiscal_calendar("2023-11-01", "2024-02-28", config_544, freq="W-SAT")
+        fy2024 = cal[cal["fiscal_year"] == 2024].head(13)
+
+        df = fy2024[["ds"]].copy()
+        df["unique_id"] = "A"
+        df["y"] = 10.0
+        df["yhat"] = 12.0
+
+        monthly = rollup_to_fiscal_month(df, config_544, value_cols=["y", "yhat"])
+
+        assert "y" in monthly.columns
+        assert "yhat" in monthly.columns
+        # First month (5 weeks): y=50, yhat=60
+        assert monthly.iloc[0]["y"] == 50.0
+        assert monthly.iloc[0]["yhat"] == 60.0
+
+    def test_weeks_expected_matches_pattern(self, weekly_data, config_544):
+        """weeks_expected should reflect the 5-4-4 pattern."""
+        monthly = rollup_to_fiscal_month(weekly_data, config_544, value_cols="y")
+        series_a = monthly[monthly["unique_id"] == "A"]
+
+        # 5-4-4 pattern: month 1=5, month 2=4, month 3=4
+        assert series_a.iloc[0]["weeks_expected"] == 5
+        assert series_a.iloc[1]["weeks_expected"] == 4
+        assert series_a.iloc[2]["weeks_expected"] == 4
+
+    def test_output_has_expected_columns(self, weekly_data, config_544):
+        """Should have all documented output columns."""
+        monthly = rollup_to_fiscal_month(weekly_data, config_544, value_cols="y")
+        expected = [
+            "unique_id", "fiscal_year", "fiscal_quarter", "fiscal_month",
+            "y", "weeks_expected", "weeks_present", "is_complete",
+            "month_start", "month_end",
+        ]
+        for col in expected:
+            assert col in monthly.columns, f"Missing column: {col}"
+
+    def test_445_pattern(self):
+        """Should work with 4-4-5 pattern."""
+        config = FiscalCalendarConfig(fiscal_year_start_month=11, week_pattern="4-4-5")
+        cal = generate_fiscal_calendar("2023-11-01", "2024-02-28", config, freq="W-SAT")
+        fy2024 = cal[cal["fiscal_year"] == 2024].head(13)
+
+        df = fy2024[["ds"]].copy()
+        df["unique_id"] = "A"
+        df["y"] = 10.0
+
+        monthly = rollup_to_fiscal_month(df, config, value_cols="y")
+
+        # 4-4-5 pattern
+        assert monthly.iloc[0]["weeks_expected"] == 4
+        assert monthly.iloc[1]["weeks_expected"] == 4
+        assert monthly.iloc[2]["weeks_expected"] == 5

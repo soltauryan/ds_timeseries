@@ -320,6 +320,139 @@ def add_fiscal_features(
     return result
 
 
+def rollup_to_fiscal_month(
+    df: pd.DataFrame,
+    fiscal_config: FiscalCalendarConfig | None = None,
+    value_cols: str | list[str] = "yhat",
+    freq: str = DEFAULT_FREQ,
+) -> pd.DataFrame:
+    """Aggregate weekly data to fiscal monthly totals.
+
+    Maps each week to its fiscal month (4 or 5 weeks depending on position
+    in the quarter pattern) and sums the specified value columns. Flags
+    months where not all expected weeks are present.
+
+    Works for both forecasts (value_col="yhat") and actuals (value_col="y").
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Weekly data with columns: unique_id, ds, and one or more value columns.
+    fiscal_config : FiscalCalendarConfig | None
+        Fiscal calendar configuration. Defaults to 5-4-4, Nov start.
+    value_cols : str | list[str]
+        Column(s) to aggregate. Default "yhat" for forecasts; use "y" for
+        actuals, or ["y", "yhat"] to roll up both together.
+    freq : str
+        Week frequency (e.g., "W-SAT").
+
+    Returns
+    -------
+    pd.DataFrame
+        Monthly totals with columns:
+        - unique_id: str
+        - fiscal_year: int
+        - fiscal_quarter: int (1-4)
+        - fiscal_month: int (1-12)
+        - <value_col>: float (summed)
+        - weeks_expected: int (4 or 5 per the pattern)
+        - weeks_present: int (how many weeks had data)
+        - is_complete: bool (weeks_present == weeks_expected)
+        - month_start: datetime (first week date in the month)
+        - month_end: datetime (last week date in the month)
+
+    Examples
+    --------
+    >>> # Roll up weekly forecasts to fiscal months
+    >>> monthly = rollup_to_fiscal_month(forecasts, value_cols="yhat")
+    >>> monthly[monthly["is_complete"]]  # Only complete months
+
+    >>> # Roll up actuals and forecasts together for monthly evaluation
+    >>> merged = actuals.merge(forecasts, on=["unique_id", "ds"])
+    >>> monthly = rollup_to_fiscal_month(merged, value_cols=["y", "yhat"])
+    >>> from ds_timeseries.evaluation.metrics import wape
+    >>> wape(monthly["y"], monthly["yhat"])  # Monthly-level WAPE
+    """
+    fiscal_config = fiscal_config or FiscalCalendarConfig()
+
+    if isinstance(value_cols, str):
+        value_cols = [value_cols]
+
+    # Generate fiscal calendar covering the data range
+    fiscal_cal = generate_fiscal_calendar(
+        df["ds"].min() - pd.Timedelta(days=7),
+        df["ds"].max() + pd.Timedelta(days=7),
+        fiscal_config,
+        freq,
+    )
+
+    # Build lookup for expected weeks per fiscal month from the pattern
+    weeks_per_month_pattern = fiscal_config.weeks_per_month  # e.g. [5, 4, 4]
+
+    # Merge fiscal periods onto data
+    df_fiscal = df.merge(
+        fiscal_cal[["ds", "fiscal_year", "fiscal_quarter", "fiscal_month",
+                     "fiscal_week_in_month"]],
+        on="ds",
+        how="left",
+    )
+
+    # Warn about unmatched weeks
+    unmatched = df_fiscal["fiscal_month"].isna().sum()
+    if unmatched > 0:
+        import warnings
+        warnings.warn(
+            f"{unmatched} rows could not be mapped to a fiscal month. "
+            f"Check that 'ds' dates align to the {freq} frequency."
+        )
+        df_fiscal = df_fiscal.dropna(subset=["fiscal_month"])
+
+    # Aggregate to fiscal month
+    group_cols = ["unique_id", "fiscal_year", "fiscal_quarter", "fiscal_month"]
+    agg_dict = {col: "sum" for col in value_cols}
+    agg_dict["ds"] = ["min", "max", "count"]
+
+    monthly = df_fiscal.groupby(group_cols).agg(agg_dict).reset_index()
+
+    # Flatten multi-level columns
+    monthly.columns = [
+        f"{a}_{b}" if b and b != "" else a
+        for a, b in monthly.columns
+    ]
+    monthly = monthly.rename(columns={
+        "ds_min": "month_start",
+        "ds_max": "month_end",
+        "ds_count": "weeks_present",
+    })
+    # Fix value col names (they got _sum suffix)
+    for col in value_cols:
+        monthly = monthly.rename(columns={f"{col}_sum": col})
+
+    # Add expected weeks per month from the pattern
+    def _expected_weeks(fiscal_month: int) -> int:
+        month_in_quarter = ((int(fiscal_month) - 1) % 3)
+        return weeks_per_month_pattern[month_in_quarter]
+
+    monthly["weeks_expected"] = monthly["fiscal_month"].apply(_expected_weeks)
+    monthly["is_complete"] = monthly["weeks_present"] == monthly["weeks_expected"]
+
+    # Cast fiscal period columns back to int (groupby preserves them but be safe)
+    for col in ["fiscal_year", "fiscal_quarter", "fiscal_month"]:
+        monthly[col] = monthly[col].astype(int)
+
+    # Order columns cleanly
+    ordered = (
+        ["unique_id", "fiscal_year", "fiscal_quarter", "fiscal_month"]
+        + value_cols
+        + ["weeks_expected", "weeks_present", "is_complete", "month_start", "month_end"]
+    )
+    monthly = monthly[ordered].sort_values(
+        ["unique_id", "fiscal_year", "fiscal_month"]
+    ).reset_index(drop=True)
+
+    return monthly
+
+
 def get_fiscal_period_summary(fiscal_calendar: pd.DataFrame) -> pd.DataFrame:
     """Get a summary of fiscal periods for validation.
 

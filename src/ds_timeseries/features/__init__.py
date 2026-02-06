@@ -6,6 +6,7 @@ from ds_timeseries.features.calendar import (
     create_mock_fiscal_calendar,
     generate_fiscal_calendar,
     get_fiscal_period_summary,
+    rollup_to_fiscal_month,
 )
 from ds_timeseries.features.engineering import (
     FeatureConfig,
@@ -27,6 +28,7 @@ __all__ = [
     "create_mock_fiscal_calendar",
     "add_fiscal_features",
     "get_fiscal_period_summary",
+    "rollup_to_fiscal_month",
     # Lags
     "add_lag_features",
     "add_rolling_features",
