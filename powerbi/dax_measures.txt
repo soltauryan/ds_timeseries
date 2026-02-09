@@ -1,0 +1,487 @@
+================================================================================
+  DAX MEASURES — Forecast Accuracy Power BI Report
+================================================================================
+
+  Data Model Assumptions:
+  -----------------------
+  Tables:
+    Actuals        (unique_id, ds, y)
+    Forecasts      (unique_id, ds, yhat, model_name)
+    FiscalCalendar (ds, fiscal_year, fiscal_quarter, fiscal_month, fiscal_week,
+                    fiscal_week_in_month, is_fiscal_month_end,
+                    is_fiscal_quarter_end, is_fiscal_year_end)
+    Hierarchy      (unique_id, customer_id, parent_customer_id,
+                    material_id, profit_center_id)
+
+  Relationships:
+    Actuals[ds]         → FiscalCalendar[ds]  (many-to-one)
+    Forecasts[ds]       → FiscalCalendar[ds]  (many-to-one, inactive — use USERELATIONSHIP)
+    Actuals[unique_id]  → Hierarchy[unique_id]  (many-to-one)
+    Forecasts[unique_id]→ Hierarchy[unique_id]  (many-to-one, inactive)
+
+  Slicer Columns:
+    Forecasts[model_name]  — pick "Your Predictions" vs "LightGBM" etc.
+    FiscalCalendar[fiscal_year], [fiscal_quarter], [fiscal_month]
+    Hierarchy[parent_customer_id], [customer_id], etc.
+
+
+================================================================================
+  1. CORE ACCURACY MEASURES
+================================================================================
+
+-- WAPE (primary metric, handles zeros)
+-- Weighted Absolute Percentage Error = Σ|actual - forecast| / Σ|actual|
+WAPE =
+VAR _AbsError =
+    SUMX(
+        Actuals,
+        VAR _uid = Actuals[unique_id]
+        VAR _dt  = Actuals[ds]
+        VAR _act = Actuals[y]
+        VAR _fct = CALCULATE(
+            SUM( Forecasts[yhat] ),
+            Forecasts[unique_id] = _uid,
+            USERELATIONSHIP( Forecasts[ds], FiscalCalendar[ds] ),
+            Forecasts[ds] = _dt
+        )
+        RETURN ABS( _act - _fct )
+    )
+VAR _TotalActual = SUMX( Actuals, ABS( Actuals[y] ) )
+RETURN
+    DIVIDE( _AbsError, _TotalActual, BLANK() )
+
+
+-- Forecast Accuracy (the inverse — "we are X% accurate")
+-- This is the number leadership wants to see.
+Forecast Accuracy =
+    1 - [WAPE]
+
+
+-- MAE
+MAE =
+VAR _Pairs =
+    ADDCOLUMNS(
+        Actuals,
+        "@fct", CALCULATE(
+            SUM( Forecasts[yhat] ),
+            Forecasts[unique_id] = EARLIER( Actuals[unique_id] ),
+            Forecasts[ds] = EARLIER( Actuals[ds] )
+        )
+    )
+RETURN
+    AVERAGEX( _Pairs, ABS( Actuals[y] - [@fct] ) )
+
+
+-- RMSE
+RMSE =
+VAR _Pairs =
+    ADDCOLUMNS(
+        Actuals,
+        "@fct", CALCULATE(
+            SUM( Forecasts[yhat] ),
+            Forecasts[unique_id] = EARLIER( Actuals[unique_id] ),
+            Forecasts[ds] = EARLIER( Actuals[ds] )
+        )
+    )
+VAR _MSE = AVERAGEX( _Pairs, ( Actuals[y] - [@fct] ) ^ 2 )
+RETURN
+    SQRT( _MSE )
+
+
+-- Bias (positive = over-forecasting, negative = under-forecasting)
+Bias =
+VAR _Pairs =
+    ADDCOLUMNS(
+        Actuals,
+        "@fct", CALCULATE(
+            SUM( Forecasts[yhat] ),
+            Forecasts[unique_id] = EARLIER( Actuals[unique_id] ),
+            Forecasts[ds] = EARLIER( Actuals[ds] )
+        )
+    )
+RETURN
+    AVERAGEX( _Pairs, [@fct] - Actuals[y] )
+
+
+-- Bias % (as % of total actual)
+Bias % =
+VAR _TotalForecast = CALCULATE( SUM( Forecasts[yhat] ) )
+VAR _TotalActual   = SUM( Actuals[y] )
+RETURN
+    DIVIDE( _TotalForecast - _TotalActual, ABS( _TotalActual ), BLANK() )
+
+
+================================================================================
+  2. TRAFFIC LIGHT STATUS
+================================================================================
+
+-- Per-series traffic light (use in conditional formatting)
+Traffic Light =
+VAR _w = [WAPE]
+RETURN
+    SWITCH(
+        TRUE(),
+        _w < 0.35, "Green",
+        _w < 0.50, "Yellow",
+        "Red"
+    )
+
+
+-- Count of series in each bucket (use with Hierarchy[unique_id] in context)
+Series Count Green =
+    COUNTROWS(
+        FILTER(
+            VALUES( Hierarchy[unique_id] ),
+            VAR _w = CALCULATE( [WAPE] )
+            RETURN _w < 0.35 && NOT ISBLANK( _w )
+        )
+    )
+
+Series Count Yellow =
+    COUNTROWS(
+        FILTER(
+            VALUES( Hierarchy[unique_id] ),
+            VAR _w = CALCULATE( [WAPE] )
+            RETURN _w >= 0.35 && _w < 0.50
+        )
+    )
+
+Series Count Red =
+    COUNTROWS(
+        FILTER(
+            VALUES( Hierarchy[unique_id] ),
+            VAR _w = CALCULATE( [WAPE] )
+            RETURN _w >= 0.50
+        )
+    )
+
+Series Count Total =
+    COUNTROWS(
+        FILTER(
+            VALUES( Hierarchy[unique_id] ),
+            NOT ISBLANK( CALCULATE( [WAPE] ) )
+        )
+    )
+
+-- Percentages for stacked bar
+Pct Green  = DIVIDE( [Series Count Green],  [Series Count Total], 0 )
+Pct Yellow = DIVIDE( [Series Count Yellow], [Series Count Total], 0 )
+Pct Red    = DIVIDE( [Series Count Red],    [Series Count Total], 0 )
+
+
+================================================================================
+  3. BENCHMARK COMPARISON
+================================================================================
+
+-- WAPE for a specific model (use in card visuals or alongside slicer)
+WAPE for Model =
+    CALCULATE(
+        [WAPE],
+        Forecasts[model_name] = SELECTEDVALUE( Forecasts[model_name] )
+    )
+
+
+-- Benchmark WAPE (hardcode "Your Predictions" as reference)
+Benchmark WAPE =
+    CALCULATE(
+        [WAPE],
+        Forecasts[model_name] = "Your Predictions"
+    )
+
+
+-- Improvement vs Benchmark (positive = model is better)
+Improvement vs Benchmark =
+    [Benchmark WAPE] - [WAPE]
+
+
+-- Improvement % (for headline: "X% more accurate")
+Improvement % =
+    DIVIDE(
+        [Benchmark WAPE] - [WAPE],
+        [Benchmark WAPE],
+        BLANK()
+    )
+
+
+-- Delta indicator text (for card subtitles)
+Improvement Label =
+VAR _imp = [Improvement %]
+RETURN
+    IF(
+        NOT ISBLANK( _imp ),
+        FORMAT( _imp, "+0.0%;-0.0%" ) & " vs current",
+        ""
+    )
+
+
+================================================================================
+  4. DOLLAR IMPACT
+================================================================================
+
+-- Set this parameter in your report or replace with a slicer/variable
+-- AVG_UNIT_VALUE = 500
+
+-- Error reduction in units (annualized from test period)
+Error Reduction Units =
+VAR _WeeksInTest   = DISTINCTCOUNT( Actuals[ds] )
+VAR _AnnualFactor  = DIVIDE( 52, _WeeksInTest, 1 )
+VAR _BenchmarkErr  = CALCULATE(
+    SUMX( Actuals, ABS( Actuals[y] - CALCULATE( SUM( Forecasts[yhat] ), Forecasts[unique_id] = EARLIER(Actuals[unique_id]), Forecasts[ds] = EARLIER(Actuals[ds]) ) ) ),
+    Forecasts[model_name] = "Your Predictions"
+)
+VAR _ModelErr = SUMX( Actuals, ABS( Actuals[y] - CALCULATE( SUM( Forecasts[yhat] ), Forecasts[unique_id] = EARLIER(Actuals[unique_id]), Forecasts[ds] = EARLIER(Actuals[ds]) ) ) )
+RETURN
+    ( _BenchmarkErr - _ModelErr ) * _AnnualFactor
+
+
+-- Estimated dollar impact (replace 500 with your AVG_UNIT_VALUE)
+Estimated Annual Dollar Impact =
+    [Error Reduction Units] * 500
+
+
+================================================================================
+  5. TRENDING — WEEK OVER WEEK
+================================================================================
+
+-- Weekly WAPE (use on a line chart with FiscalCalendar[ds] on x-axis)
+Weekly WAPE =
+VAR _AbsError = SUMX( Actuals, ABS( Actuals[y] -
+    CALCULATE( SUM(Forecasts[yhat]),
+        Forecasts[unique_id] = EARLIER(Actuals[unique_id]),
+        Forecasts[ds] = EARLIER(Actuals[ds]) ) ) )
+VAR _TotalActual = SUMX( Actuals, ABS( Actuals[y] ) )
+RETURN
+    DIVIDE( _AbsError, _TotalActual, BLANK() )
+
+
+-- Cumulative WAPE (running total through the selected date)
+Cumulative WAPE =
+VAR _MaxDate = MAX( FiscalCalendar[ds] )
+VAR _MinDate = MIN( ALLSELECTED( FiscalCalendar[ds] ) )
+RETURN
+    CALCULATE(
+        [WAPE],
+        FiscalCalendar[ds] >= _MinDate,
+        FiscalCalendar[ds] <= _MaxDate,
+        REMOVEFILTERS( FiscalCalendar[ds] )
+    )
+
+
+-- Week-over-week WAPE change
+WoW WAPE Change =
+VAR _CurrentWAPE = [Weekly WAPE]
+VAR _PriorWAPE = CALCULATE(
+    [Weekly WAPE],
+    DATEADD( FiscalCalendar[ds], -7, DAY )
+)
+RETURN
+    _CurrentWAPE - _PriorWAPE
+
+
+================================================================================
+  6. FISCAL PERIOD MEASURES
+================================================================================
+
+-- Fiscal Month WAPE (automatically respects fiscal calendar slicers)
+-- Just use [WAPE] with FiscalCalendar[fiscal_month] in your visual context.
+-- These are convenience measures for specific comparisons.
+
+-- Current Fiscal Month WAPE
+Current Fiscal Month WAPE =
+VAR _MaxDate = MAX( Actuals[ds] )
+VAR _CurrentFM = LOOKUPVALUE(
+    FiscalCalendar[fiscal_month],
+    FiscalCalendar[ds], _MaxDate
+)
+VAR _CurrentFY = LOOKUPVALUE(
+    FiscalCalendar[fiscal_year],
+    FiscalCalendar[ds], _MaxDate
+)
+RETURN
+    CALCULATE(
+        [WAPE],
+        FiscalCalendar[fiscal_month] = _CurrentFM,
+        FiscalCalendar[fiscal_year]  = _CurrentFY,
+        REMOVEFILTERS( FiscalCalendar[ds] )
+    )
+
+
+-- Prior Fiscal Month WAPE
+Prior Fiscal Month WAPE =
+VAR _MaxDate = MAX( Actuals[ds] )
+VAR _CurrentFM = LOOKUPVALUE(
+    FiscalCalendar[fiscal_month],
+    FiscalCalendar[ds], _MaxDate
+)
+VAR _CurrentFY = LOOKUPVALUE(
+    FiscalCalendar[fiscal_year],
+    FiscalCalendar[ds], _MaxDate
+)
+VAR _PriorFM = IF( _CurrentFM = 1, 12, _CurrentFM - 1 )
+VAR _PriorFY = IF( _CurrentFM = 1, _CurrentFY - 1, _CurrentFY )
+RETURN
+    CALCULATE(
+        [WAPE],
+        FiscalCalendar[fiscal_month] = _PriorFM,
+        FiscalCalendar[fiscal_year]  = _PriorFY,
+        REMOVEFILTERS( FiscalCalendar[ds] )
+    )
+
+
+-- Month-over-month improvement
+MoM WAPE Change =
+    [Current Fiscal Month WAPE] - [Prior Fiscal Month WAPE]
+
+
+-- Hockey stick detection: WAPE on fiscal month-end weeks vs mid-month
+WAPE Month End Weeks =
+    CALCULATE(
+        [WAPE],
+        FiscalCalendar[is_fiscal_month_end] = TRUE()
+    )
+
+WAPE Mid Month Weeks =
+    CALCULATE(
+        [WAPE],
+        FiscalCalendar[is_fiscal_month_end] = FALSE()
+    )
+
+
+================================================================================
+  7. HIERARCHY MEASURES
+================================================================================
+
+-- These work automatically when you use hierarchy columns as
+-- rows/columns in your matrix visual. Just use [WAPE], [MAE], etc.
+-- These convenience measures let you force a specific level.
+
+-- WAPE at Parent Customer level
+WAPE by Parent Customer =
+    CALCULATE(
+        [WAPE],
+        ALLEXCEPT( Hierarchy, Hierarchy[parent_customer_id] )
+    )
+
+-- WAPE at Customer level
+WAPE by Customer =
+    CALCULATE(
+        [WAPE],
+        ALLEXCEPT( Hierarchy, Hierarchy[customer_id] )
+    )
+
+-- WAPE at Profit Center level
+WAPE by Profit Center =
+    CALCULATE(
+        [WAPE],
+        ALLEXCEPT( Hierarchy, Hierarchy[profit_center_id] )
+    )
+
+
+================================================================================
+  8. TOTALS & KPI CARDS
+================================================================================
+
+-- Total Actual (test period)
+Total Actual = SUM( Actuals[y] )
+
+
+-- Total Forecast
+Total Forecast =
+    CALCULATE( SUM( Forecasts[yhat] ) )
+
+
+-- Total Absolute Error
+Total Absolute Error =
+    SUMX(
+        Actuals,
+        ABS( Actuals[y] -
+            CALCULATE( SUM(Forecasts[yhat]),
+                Forecasts[unique_id] = EARLIER(Actuals[unique_id]),
+                Forecasts[ds] = EARLIER(Actuals[ds]) ) )
+    )
+
+
+-- Series count
+Total Series =
+    DISTINCTCOUNT( Actuals[unique_id] )
+
+
+-- Weeks in test
+Total Weeks =
+    DISTINCTCOUNT( Actuals[ds] )
+
+
+-- Best model name (for card subtitle)
+Best Model Name =
+VAR _Scores =
+    ADDCOLUMNS(
+        VALUES( Forecasts[model_name] ),
+        "@wape", CALCULATE( [WAPE] )
+    )
+RETURN
+    MINX( _Scores, [@wape] )
+    -- Note: returns the WAPE value. For the name, use:
+    -- TOPN(1, _Scores, [@wape], ASC) in a table and take the name.
+
+
+================================================================================
+  9. CONDITIONAL FORMATTING HELPERS
+================================================================================
+
+-- WAPE background color (use in conditional formatting rules)
+-- Returns hex color string for matrix/table cells.
+WAPE Color =
+VAR _w = [WAPE]
+RETURN
+    SWITCH(
+        TRUE(),
+        ISBLANK( _w ), "#F8F9FA",
+        _w < 0.35,     "#2D9F5A",
+        _w < 0.50,     "#F5A623",
+        "#D94F4F"
+    )
+
+
+-- Bias direction icon (use with conditional formatting icon set)
+Bias Direction =
+VAR _b = [Bias %]
+RETURN
+    SWITCH(
+        TRUE(),
+        ISBLANK( _b ),    0,
+        ABS( _b ) < 0.05, 0,      -- neutral (within 5%)
+        _b > 0,            1,      -- over-forecast
+        -1                          -- under-forecast
+    )
+
+
+================================================================================
+  NOTES
+================================================================================
+
+  Usage Tips:
+  -----------
+  1. Put [model_name] as a SLICER so users can toggle between models.
+  2. Use [Forecast Accuracy] on the headline KPI card (leadership prefers
+     "we are 63% accurate" over "WAPE is 37%").
+  3. Use [Weekly WAPE] on a line chart with ds on x-axis for trendlines.
+  4. Use [Traffic Light] with conditional formatting on matrix visuals.
+  5. Use [Improvement %] and [Estimated Annual Dollar Impact] on the
+     executive summary page.
+
+  Performance Tips:
+  -----------------
+  - The SUMX + CALCULATE pattern in WAPE is expensive at scale.
+    For >100k rows, consider pre-computing a merged Actuals+Forecasts
+    table in Power Query with an "error" column, then just SUM it.
+  - Use SUMMARIZE or pre-aggregated tables for hierarchy-level views.
+  - If you have multiple models in Forecasts, always filter by
+    model_name to avoid cross-joining.
+
+  Data Loading in Power Query:
+  ----------------------------
+  - Load your model_scorecard.csv directly as a table for the
+    scorecard visual.
+  - Load the fiscal calendar as its own table and mark it as a
+    Date Table (even though it's weekly, this enables time intelligence).
+  - Load hierarchy as a dimension table (one row per unique_id).
