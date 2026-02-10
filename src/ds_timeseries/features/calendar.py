@@ -314,6 +314,12 @@ def add_fiscal_features(
             freq,
         )
 
+    # Drop any pre-existing fiscal columns to avoid _x/_y merge collisions
+    fiscal_cols = [c for c in fiscal_calendar.columns if c != "ds"]
+    overlap = [c for c in fiscal_cols if c in df.columns]
+    if overlap:
+        df = df.drop(columns=overlap)
+
     # Merge on ds
     result = df.merge(fiscal_calendar, on="ds", how="left")
 
